@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import xlsxwriter
 import importlib
 import nokia_parser
 importlib.reload(nokia_parser)
@@ -106,20 +107,59 @@ with tab2:
                 all_lines.extend(extract_lines_from_file(file))
             
             try:
-                del_cfg, cre_cfg, warnings = generate_migration_configs(excel_plan, all_lines)
+                del_cfg, cre_cfg, rol_cfg, warnings = generate_migration_configs(excel_plan, all_lines)
                 
                 if warnings:
                     for w in warnings:
                         st.error(f"🚨 **WARNING CLASH DETECTED:** {w} in the uploaded router logs!")
-                        
-                c1, c2 = st.columns(2)
+
+                # ── Combined Text MOP ──────────────────────────────────────────
+                sep = "=" * 70
+                combined_txt = (
+                    f"{sep}\n  SECTION 1 — PARENT NODE DELETION SCRIPT\n{sep}\n\n{del_cfg}\n"
+                    f"{sep}\n  SECTION 2 — TARGET NODE CREATION SCRIPT\n{sep}\n\n{cre_cfg}\n"
+                    f"{sep}\n  SECTION 3 — ROLLBACK MOP (CLEANUP TARGET)\n{sep}\n\n{rol_cfg}"
+                )
+
+                # ── Preview 3 columns ──────────────────────────────────────────
+                c1, c2, c3 = st.columns(3)
                 with c1:
-                    st.subheader("🗑️ Parent Node Deletion Script")
-                    st.text_area("Review Deletion Commands:", value=del_cfg, height=400)
-                    st.download_button("Download Deletion MOP (.txt)", data=del_cfg, file_name="parent_deletion_mop.txt", use_container_width=True)
+                    st.subheader("🗑️ Deletion")
+                    st.text_area("Parent Deletion:", value=del_cfg, height=350, key="del_preview")
                 with c2:
-                    st.subheader("🏗️ Target Node Creation Script")
-                    st.text_area("Review Creation Commands:", value=cre_cfg, height=400)
-                    st.download_button("Download Creation MOP (.txt)", data=cre_cfg, file_name="target_creation_mop.txt", use_container_width=True)
+                    st.subheader("🏗️ Creation")
+                    st.text_area("Target Creation:", value=cre_cfg, height=350, key="cre_preview")
+                with c3:
+                    st.subheader("🔄 Rollback")
+                    st.text_area("Rollback MOP:", value=rol_cfg, height=350, key="rol_preview")
+
+                # ── Merged Downloads ───────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("### 📥 Download Combined MOP Result")
+                
+                # Excel Generation with xlsxwriter
+                excel_io = io.BytesIO()
+                workbook = xlsxwriter.Workbook(excel_io, {"in_memory": True})
+                fmt = workbook.add_format({"font_name": "Courier New", "font_size": 10})
+
+                def add_sheet(wb, name, content):
+                    ws = wb.add_worksheet(name)
+                    ws.set_column(0, 0, 120)
+                    for r, line in enumerate(content.splitlines()):
+                        ws.write(r, 0, line, fmt)
+
+                add_sheet(workbook, "Deletion", del_cfg)
+                add_sheet(workbook, "Creation", cre_cfg)
+                add_sheet(workbook, "Rollback", rol_cfg)
+                add_sheet(workbook, "Combined MOP", combined_txt)
+                workbook.close()
+                excel_io.seek(0)
+
+                dl_col1, dl_col2 = st.columns(2)
+                with dl_col1:
+                    st.download_button("📄 Download .TXT MOP", data=combined_txt, file_name="migration_mop.txt", use_container_width=True)
+                with dl_col2:
+                    st.download_button("📊 Download .XLSX MOP", data=excel_io.getvalue(), file_name="migration_mop.xlsx", use_container_width=True)
+                
             except Exception as e:
-                st.error(f"Failed to generate configurations: Are your excel columns named correctly? Error: {e}")
+                st.error(f"Failed to generate configurations: {e}")
