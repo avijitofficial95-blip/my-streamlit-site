@@ -147,6 +147,7 @@ def generate_migration_configs(excel_file, router_log_lines):
     
     deletion_configs = []
     creation_configs = []
+    rollback_configs = []
     warnings = []
     
     for index, row in df.iterrows():
@@ -163,18 +164,22 @@ def generate_migration_configs(excel_file, router_log_lines):
             if warning_msg not in warnings:
                 warnings.append(warning_msg)
                 
-        vlans = []
+        vlans_to_process = []
         for col_name in df.columns:
-            if str(col_name).lower().startswith("vlan"):
+            c_lower = str(col_name).lower()
+            if c_lower.startswith("vlan"):
                 v_value = row.get(col_name)
                 if str(v_value).strip():
                     try:
                         v_val = int(float(str(v_value).strip()))
-                        vlans.append(str(v_val))
+                        vlan_id = str(v_val)
                     except ValueError:
-                        vlans.append(str(v_value).strip())
+                        vlan_id = str(v_value).strip()
+                    vlans_to_process.append({"id": vlan_id, "col": c_lower})
                         
-        for vlan in vlans:
+        for v_item in vlans_to_process:
+            vlan = v_item["id"]
+            col_key = v_item["col"]
             expected_parent_sap = f"{parent_intf}:{vlan}"
             
             matched_intf = None
@@ -211,14 +216,24 @@ def generate_migration_configs(excel_file, router_log_lines):
                 add_snip += f'{service_cmd}\n'
                 add_snip += f'interface "{new_intf_name}" create\n'
                 if i_desc: add_snip += f'description {i_desc}\n'
-                add_snip += f'address {address}\n'
-                add_snip += f'dhcp\n'
-                add_snip += f'description "DHCP-Relay-Agent"\n'
-                add_snip += f'server 10.209.68.188\n'
-                add_snip += f'trusted\n'
-                add_snip += f'gi-address {ip_no_cidr} src-ip-addr\n'
+                
+                # IPv6 vs IPv4 Address Logic
+                if ":" in address:
+                    add_snip += f'ipv6\naddress {address}\nexit\n'
+                else:
+                    add_snip += f'address {address}\n'
+                
+                # DHCP Block (Excluded for Vlan1, Vlan2, Vlan4 columns)
+                if col_key not in ["vlan1", "vlan2", "vlan4"]:
+                    add_snip += f'dhcp\n'
+                    add_snip += f'description "DHCP-Relay-Agent"\n'
+                    add_snip += f'server 10.209.68.188\n'
+                    add_snip += f'trusted\n'
+                    add_snip += f'gi-address {ip_no_cidr} src-ip-addr\n'
+                    add_snip += f'no shutdown\n'
+                    add_snip += f'exit\n'
+                
                 add_snip += f'no shutdown\n'
-                add_snip += f'exit\n'
                 add_snip += f'sap {target_sap} create\n'
                 if s_desc: add_snip += f'description {s_desc}\n'
                 add_snip += f'ingress\nqos 5001\nexit\n'
@@ -226,8 +241,36 @@ def generate_migration_configs(excel_file, router_log_lines):
                 add_snip += f'exit\n'
                 add_snip += f'exit all\n\n'
                 creation_configs.append(add_snip)
+                
+                # --- ROLLBACK (1. Cleanup Target, 2. Restore Parent) ---
+                rol_snip = f'# --- Rollback Migration for VLAN {vlan} ---\n'
+                rol_snip += f'# 1. Cleanup Target Node ({target_router})\n'
+                rol_snip += f'{service_cmd}\n'
+                rol_snip += f'interface "{new_intf_name}" shutdown\n'
+                rol_snip += f'interface "{new_intf_name}" sap {target_sap} shutdown\n'
+                rol_snip += f'interface "{new_intf_name}" no sap {target_sap}\n'
+                rol_snip += f'no interface "{new_intf_name}"\n'
+                rol_snip += f'exit all\n\n'
+                
+                rol_snip += f'# 2. Restore Parent Node ({parent_router})\n'
+                rol_snip += f'{service_cmd}\n'
+                rol_snip += f'interface "{intf_name}" create\n'
+                if i_desc: rol_snip += f'description {i_desc}\n'
+                if ":" in address:
+                    rol_snip += f'ipv6\naddress {address}\nexit\n'
+                elif address:
+                    rol_snip += f'address {address}\n'
+                rol_snip += f'sap {actual_sap} create\n'
+                if s_desc: rol_snip += f'description {s_desc}\n'
+                rol_snip += f'ingress\nqos 5001\nexit\n'
+                rol_snip += f'egress\nqos 5001\nexit\n'
+                rol_snip += f'exit\n'
+                rol_snip += f'no shutdown\n'
+                rol_snip += f'exit all\n\n'
+                rollback_configs.append(rol_snip)
+                
             else:
                 del_snip = f"# ERROR: SAP '{expected_parent_sap}' not found in the uploaded log!\n\n"
                 deletion_configs.append(del_snip)
                 
-    return "".join(deletion_configs), "".join(creation_configs), warnings
+    return "".join(deletion_configs), "".join(creation_configs), "".join(rollback_configs), warnings
