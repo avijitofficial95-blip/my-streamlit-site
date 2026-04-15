@@ -63,27 +63,53 @@ def get_vlan_ip_mapping(text_lines):
                 "IP Address": ip,
                 "Subnet Mask (CIDR)": "/" + subnet if subnet else ""
             })
-            current_interface = None
             
-        elif stripped.startswith("echo ") or stripped.startswith("port "):
+        elif stripped.startswith("echo ") or stripped.startswith("port ") or stripped.startswith("router ") or stripped.startswith("vprn ") or stripped.startswith("#"):
             current_interface = None
             
     return vlan_mapping
 
 def extract_interface_details(text_lines):
     """
-    Parses L3 router interfaces to extract all details: Name, IP, Subnet, exact SAP, VPRN context, and Descriptions.
+    Parses L3 router interfaces to extract all details: Name, IP, exact SAPs, VPRN context, and Descriptions.
+    Handles multiple SAPs and IPs robustly by tracking block boundaries natively.
     """
     interfaces = []
     current_context = "Base"
+    
     current_interface = None
     current_address = None
-    current_sap = None
     intf_desc = ""
+    
+    current_saps = []
+    current_sap = None
     sap_desc = ""
+    
     in_sap = False
     in_dhcp = False
     
+    def save_interface():
+        if current_interface:
+            if not current_saps:
+                interfaces.append({
+                    "context": current_context,
+                    "name": current_interface,
+                    "address": current_address or "",
+                    "sap": "",
+                    "intf_desc": intf_desc,
+                    "sap_desc": ""
+                })
+            else:
+                for s_id, s_desc in current_saps:
+                    interfaces.append({
+                        "context": current_context,
+                        "name": current_interface,
+                        "address": current_address or "",
+                        "sap": s_id,
+                        "intf_desc": intf_desc,
+                        "sap_desc": s_desc
+                    })
+
     for line in text_lines:
         stripped = line.strip()
         
@@ -91,52 +117,77 @@ def extract_interface_details(text_lines):
             current_context = stripped.split(" ")[1]
         elif stripped.startswith("router "):
             current_context = "Base"
-        elif stripped.startswith("interface "):
-            parts = stripped.split(' ', 1)
-            if len(parts) > 1:
-                current_interface = parts[1].replace('"', '').replace(' create', '')
-                current_address = None
-                current_sap = None
-                intf_desc = ""
-                sap_desc = ""
-                in_sap = False
-                in_dhcp = False
+            
+        elif stripped.startswith("interface ") or stripped.startswith("echo ") or stripped.startswith("#") or stripped.startswith("port "):
+            if current_interface:
+                if in_sap and current_sap:
+                    current_saps.append((current_sap, sap_desc))
+                save_interface()
+                current_interface = None
+                
+            if stripped.startswith("interface "):
+                parts = stripped.split(' ', 1)
+                if len(parts) > 1:
+                    current_interface = parts[1].replace('"', '').replace(' create', '')
+                    current_address = None
+                    intf_desc = ""
+                    current_saps = []
+                    current_sap = None
+                    sap_desc = ""
+                    in_sap = False
+                    in_dhcp = False
                 
         elif current_interface:
             if stripped.startswith("address "):
-                address_part = stripped.split(' ', 1)[1]
-                current_address = address_part 
+                # Only grab the primary address or the first one we see
+                if not current_address:
+                    current_address = stripped.split(' ', 1)[1] 
             elif stripped.startswith("dhcp"):
                 in_dhcp = True
+                if in_sap and current_sap:
+                    current_saps.append((current_sap, sap_desc))
+                    current_sap = None
+                    in_sap = False
             elif stripped.startswith("sap "):
+                if in_sap and current_sap:
+                    current_saps.append((current_sap, sap_desc))
                 sap_part = stripped.split(' ')[1] 
                 current_sap = sap_part 
+                sap_desc = ""
                 in_sap = True
+                in_dhcp = False
             elif stripped.startswith("description "):
                 desc = stripped.split(' ', 1)[1]
                 if in_sap:
                     sap_desc = desc
-                elif not in_dhcp and not intf_desc:
+                elif in_dhcp:
+                    pass
+                elif not intf_desc:
                     intf_desc = desc
             elif stripped == "exit":
                 if in_sap:
+                    if current_sap:
+                        current_saps.append((current_sap, sap_desc))
+                        current_sap = None
+                        sap_desc = ""
                     in_sap = False
                 elif in_dhcp:
                     in_dhcp = False
-                elif current_address and current_sap:
-                    interfaces.append({
-                        "context": current_context,
-                        "name": current_interface,
-                        "address": current_address,
-                        "sap": current_sap,
-                        "intf_desc": intf_desc,
-                        "sap_desc": sap_desc
-                    })
-                    current_interface = None
-            elif stripped.startswith("echo") or stripped.startswith("#"):
-                current_interface = None
-                
+
+    if current_interface:
+        if in_sap and current_sap:
+            current_saps.append((current_sap, sap_desc))
+        save_interface()
+        
     return interfaces
+
+def get_router_model(target_router):
+    tr = str(target_router).upper()
+    if "IXRB" in tr: return "IXRB"
+    if "IXR2" in tr: return "IXR2"
+    if "SR01" in tr or "SR12" in tr or "SR" in tr: return "SR"
+    if "SAR8" in tr or "SAR" in tr: return "SAR"
+    return "IXR2" # Default to IXR2
 
 def generate_migration_configs(excel_file, router_log_lines):
     df = pd.read_excel(excel_file)
@@ -163,18 +214,28 @@ def generate_migration_configs(excel_file, router_log_lines):
             if warning_msg not in warnings:
                 warnings.append(warning_msg)
                 
-        vlans = []
-        for col_name in df.columns:
-            if str(col_name).lower().startswith("vlan"):
-                v_value = row.get(col_name)
-                if str(v_value).strip():
+        vlan_types = ["U-Plane Vlan", "C-Plane Vlan", "M-Plane Vlan", "2G Vlan"]
+        vlans_to_process = []
+        for v_type in vlan_types:
+            matched_col = None
+            for col in df.columns:
+                if v_type.lower().replace(" ", "") in str(col).lower().replace(" ", ""):
+                    matched_col = col
+                    break
+            
+            if matched_col:
+                v_value = row.get(matched_col)
+                if pd.notna(v_value) and str(v_value).strip():
                     try:
                         v_val = int(float(str(v_value).strip()))
-                        vlans.append(str(v_val))
+                        vlans_to_process.append({"type": v_type, "vlan": str(v_val)})
                     except ValueError:
-                        vlans.append(str(v_value).strip())
+                        vlans_to_process.append({"type": v_type, "vlan": str(v_value).strip()})
                         
-        for vlan in vlans:
+        output_records = []
+        for item in vlans_to_process:
+            vlan = item["vlan"]
+            vlan_type = item["type"]
             expected_parent_sap = f"{parent_intf}:{vlan}"
             
             matched_intf = None
@@ -196,8 +257,10 @@ def generate_migration_configs(excel_file, router_log_lines):
                 target_sap = f"{target_intf}:{vlan}"
                 new_intf_name = f"GE-{target_sap}"
                 
+                target_model = get_router_model(target_router)
+                
                 # --- DELETION ---
-                del_snip = f'# --- Deletion for VLAN {vlan} from {parent_router} ---\n'
+                del_snip = f'# --- Deletion for {vlan_type} (VLAN {vlan}) from {parent_router} ---\n'
                 del_snip += f'{service_cmd}\n'
                 del_snip += f'interface "{intf_name}" shutdown\n'
                 del_snip += f'interface "{intf_name}" sap {actual_sap} shutdown\n'
@@ -207,27 +270,72 @@ def generate_migration_configs(excel_file, router_log_lines):
                 deletion_configs.append(del_snip)
                 
                 # --- CREATION ---
-                add_snip = f'# --- Creation for VLAN {vlan} on {target_router} ---\n'
+                add_snip = f'# --- Creation for {vlan_type} (VLAN {vlan}) on {target_router} ({target_model}) ---\n'
                 add_snip += f'{service_cmd}\n'
+                
+                # Using target_sap as interface name, similar to configs from the image (e.g. LAG-9:1117)
                 add_snip += f'interface "{new_intf_name}" create\n'
                 if i_desc: add_snip += f'description {i_desc}\n'
-                add_snip += f'address {address}\n'
-                add_snip += f'dhcp\n'
-                add_snip += f'description "DHCP-Relay-Agent"\n'
-                add_snip += f'server 10.209.68.188\n'
-                add_snip += f'trusted\n'
-                add_snip += f'gi-address {ip_no_cidr} src-ip-addr\n'
-                add_snip += f'no shutdown\n'
-                add_snip += f'exit\n'
+                
+                is_ipv6 = ":" in address
+                if is_ipv6:
+                    add_snip += f'ipv6\n'
+                    add_snip += f'address {address}\n'
+                    if target_model == "IXRB":
+                        add_snip += f'reachable-time 3600\n'
+                    add_snip += f'exit\n'
+                else:
+                    add_snip += f'address {address}\n'
+                
+                if "m-plane" in str(vlan_type).lower():
+                    add_snip += f'dhcp\n'
+                    add_snip += f'description "DHCP-Relay-Agent"\n'
+                    add_snip += f'server 10.209.68.138\n'
+                    add_snip += f'trusted\n'
+                    add_snip += f'gi-address {ip_no_cidr} src-ip-addr\n'
+                    add_snip += f'no shutdown\n'
+                    add_snip += f'exit\n'
+                
                 add_snip += f'sap {target_sap} create\n'
                 if s_desc: add_snip += f'description {s_desc}\n'
                 add_snip += f'ingress\nqos 5001\nexit\n'
-                add_snip += f'egress\nqos 5001\nexit\n'
+                
+                add_snip += f'egress\n'
+                if target_model in ["IXR2", "IXRB"]:
+                    add_snip += f'egress-remark-policy "5001"\n'
+                else:
+                    add_snip += f'qos 5001\n'
+                add_snip += f'exit\n'
+                
+                if target_model in ["IXR2", "IXRB"]:
+                    add_snip += f'dist-cpu-protection "dcp"\nexit\n'
+                elif target_model == "SR":
+                    add_snip += f'dist-cpu-protection "dist-cpu-arp"\nexit\n'
+                
                 add_snip += f'exit\n'
                 add_snip += f'exit all\n\n'
                 creation_configs.append(add_snip)
+                
+                output_records.append({
+                    "Site ID": str(row.get("Site ID", "")),
+                    "Parent Router": parent_router,
+                    "Target Router": target_router,
+                    "VLAN Type": vlan_type,
+                    "VLAN ID": vlan,
+                    "Deletion Command": del_snip.strip(),
+                    "Creation Command": add_snip.strip()
+                })
             else:
                 del_snip = f"# ERROR: SAP '{expected_parent_sap}' not found in the uploaded log!\n\n"
                 deletion_configs.append(del_snip)
+                output_records.append({
+                    "Site ID": str(row.get("Site ID", "")),
+                    "Parent Router": parent_router,
+                    "Target Router": target_router,
+                    "VLAN Type": vlan_type,
+                    "VLAN ID": vlan,
+                    "Deletion Command": del_snip.strip(),
+                    "Creation Command": ""
+                })
                 
-    return "".join(deletion_configs), "".join(creation_configs), warnings
+    return "".join(deletion_configs), "".join(creation_configs), warnings, output_records
