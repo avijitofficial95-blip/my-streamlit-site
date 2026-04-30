@@ -49,7 +49,6 @@ with tab1:
                     st.warning("No VLAN/IP mappings found in the uploaded file.")
                     
             if req_admin_down:
-                st.write("") 
                 st.subheader("🔌 Admin Down Ports")
                 admin_data = get_admin_down_ports(lines)
                 if admin_data:
@@ -90,8 +89,44 @@ with tab1:
 # ----------------- TAB 2 -----------------
 with tab2:
     st.markdown("### 🔄 Cross-Reference & MOP Generation")
-    st.info("Upload your **Service Migration Excel Sheet** alongside your **Router Logs** (Parent AND Target). The app will cross-reference the SAPs, IPs, and dynamically validate port states before generating Deletion & Creation Scripts.")
+    st.info("Upload your **Service Migration Excel Sheet** alongside your **Router Logs** (Parent AND Target). The app will cross-reference the SAPs, IPs, and map target configurations.")
     
+    # Template Download
+    try:
+        # Dynamically generate the template to ensure valid strictly-formatted Excel file
+        df_template = pd.DataFrame(columns=["site_id", "parent_router", "parent_port", "src_vlan", "target_vlan", "target_router", "target_port", "bandwidth"])
+        
+        # Proper handling of BytesIO buffer for Excel
+        template_io = io.BytesIO()
+        writer = pd.ExcelWriter(template_io, engine='xlsxwriter')
+        df_template.to_excel(writer, sheet_name='Migration_Input', index=False)
+        writer.close()
+        
+        col_down1, col_down2 = st.columns(2)
+        with col_down1:
+            st.download_button(
+                label="📥 Download Template (.xlsx)", 
+                data=template_io.getvalue(), 
+                file_name="migration_input_template.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                type="secondary",
+                use_container_width=True
+            )
+        
+        # Provide CSV version as a bulletproof alternative
+        csv_data = df_template.to_csv(index=False).encode('utf-8')
+        with col_down2:
+            st.download_button(
+                label="📥 Download Template (.csv)",
+                data=csv_data,
+                file_name="migration_input_template.csv",
+                mime="text/csv",
+                type="secondary",
+                use_container_width=True
+            )
+    except Exception as e:
+        st.warning(f"Template generation failed: {e}")
+
     col1, col2 = st.columns(2)
     with col1:
         log_uploads = st.file_uploader("1. Upload Router Logs (Parent & Target)", type=["txt", "xlsx", "xls"], accept_multiple_files=True, key="tab2_log")
@@ -101,65 +136,35 @@ with tab2:
     if log_uploads and excel_plan:
         if st.button("🚀 Generate MOP Configurations", type="primary", use_container_width=True):
             st.markdown("---")
-            
             all_lines = []
             for file in log_uploads:
                 all_lines.extend(extract_lines_from_file(file))
             
             try:
-                del_cfg, cre_cfg, rol_cfg, warnings = generate_migration_configs(excel_plan, all_lines)
+                df_auto, df_manual, warnings = generate_migration_configs(excel_plan, all_lines)
                 
                 if warnings:
                     for w in warnings:
-                        st.error(f"🚨 **WARNING CLASH DETECTED:** {w} in the uploaded router logs!")
+                        st.error(f"🚨 **WARNING DETECTED:** {w}")
 
-                # ── Combined Text MOP ──────────────────────────────────────────
-                sep = "=" * 70
-                combined_txt = (
-                    f"{sep}\n  SECTION 1 — PARENT NODE DELETION SCRIPT\n{sep}\n\n{del_cfg}\n"
-                    f"{sep}\n  SECTION 2 — TARGET NODE CREATION SCRIPT\n{sep}\n\n{cre_cfg}\n"
-                    f"{sep}\n  SECTION 3 — ROLLBACK MOP (CLEANUP TARGET)\n{sep}\n\n{rol_cfg}"
-                )
+                st.success("MOP Generated Successfully!")
+                st.write("Preview of Automation MOP (Head 10)")
+                st.dataframe(df_auto.head(10), use_container_width=True)
 
-                # ── Preview 3 columns ──────────────────────────────────────────
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    st.subheader("🗑️ Deletion")
-                    st.text_area("Parent Deletion:", value=del_cfg, height=350, key="del_preview")
-                with c2:
-                    st.subheader("🏗️ Creation")
-                    st.text_area("Target Creation:", value=cre_cfg, height=350, key="cre_preview")
-                with c3:
-                    st.subheader("🔄 Rollback")
-                    st.text_area("Rollback MOP:", value=rol_cfg, height=350, key="rol_preview")
-
-                # ── Merged Downloads ───────────────────────────────────────────
-                st.markdown("---")
-                st.markdown("### 📥 Download Combined MOP Result")
-                
                 # Excel Generation with xlsxwriter
                 excel_io = io.BytesIO()
-                workbook = xlsxwriter.Workbook(excel_io, {"in_memory": True})
-                fmt = workbook.add_format({"font_name": "Courier New", "font_size": 10})
-
-                def add_sheet(wb, name, content):
-                    ws = wb.add_worksheet(name)
-                    ws.set_column(0, 0, 120)
-                    for r, line in enumerate(content.splitlines()):
-                        ws.write(r, 0, line, fmt)
-
-                add_sheet(workbook, "Deletion", del_cfg)
-                add_sheet(workbook, "Creation", cre_cfg)
-                add_sheet(workbook, "Rollback", rol_cfg)
-                add_sheet(workbook, "Combined MOP", combined_txt)
-                workbook.close()
-                excel_io.seek(0)
-
-                dl_col1, dl_col2 = st.columns(2)
-                with dl_col1:
-                    st.download_button("📄 Download .TXT MOP", data=combined_txt, file_name="migration_mop.txt", use_container_width=True)
-                with dl_col2:
-                    st.download_button("📊 Download .XLSX MOP", data=excel_io.getvalue(), file_name="migration_mop.xlsx", use_container_width=True)
+                with pd.ExcelWriter(excel_io, engine='xlsxwriter') as writer:
+                    df_auto.to_excel(writer, sheet_name='Automation MOP', index=False)
+                    df_manual.to_excel(writer, sheet_name='Manual MOP', index=False, header=True)
+                
+                st.download_button(
+                    label="📊 Download Final Output MOP (.XLSX)", 
+                    data=excel_io.getvalue(), 
+                    file_name="output_mop.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                    use_container_width=True,
+                    type="primary"
+                )
                 
             except Exception as e:
                 st.error(f"Failed to generate configurations: {e}")
