@@ -1,0 +1,12 @@
+configure port target_port
+description "need_to_configure_manually"
+ethernet
+speed 1000
+autonegotiate limited
+mode access
+encap-type dot1q
+mtu 9212
+egress-port-qos-policy "5001"
+exit
+no shutdown
+exit all

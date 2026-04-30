@@ -1,0 +1,21 @@
+configure service vprn "extracted_vrf"
+interface "GE-target_port:target_vlan" create
+description "extracted_desc"
+ipv6
+icmp6
+no redirects
+exit
+address address_ipv6
+reachable-time 3600
+dhcpv6_block
+exit
+sap target_port:target_vlan create
+description "extracted_desc"
+ingress
+qos 5001
+exit
+egress
+egress-remark-policy "5001"
+exit
+dist-cpu-protection "dcp"
+exit all

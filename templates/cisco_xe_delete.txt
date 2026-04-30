@@ -1,0 +1,14 @@
+no interface src_port.src_vlan
+
+---
+
+interface src_port.src_vlan
+ description extracted_desc
+ vrf extracted_vrf
+ ipv4 address address_ipv4
+ ipv6_block_start
+ ipv6 address address_ipv6
+ ipv6_block_end
+ mtu 9000
+ encapsulation dot1q src_vlan
+!

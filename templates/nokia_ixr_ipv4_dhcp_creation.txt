@@ -1,0 +1,15 @@
+configure service vprn "extracted_vrf"
+interface "GE-target_port:target_vlan" create
+description "extracted_desc"
+address address_ipv4
+dhcp_block
+sap target_port:target_vlan create
+description "extracted_desc"
+ingress
+qos 5001
+exit
+egress
+egress-remark-policy "5001"
+exit
+dist-cpu-protection "dcp"
+exit all

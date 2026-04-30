@@ -1,0 +1,11 @@
+set interfaces target_port unit target_vlan description "extracted_desc"
+set interfaces target_port unit target_vlan family inet address address_ipv4
+ipv6_block_start
+set interfaces target_port unit target_vlan family inet6 address address_ipv6
+ipv6_block_end
+set routing-instances extracted_vrf interface target_port.target_vlan
+
+---
+
+delete interfaces target_port unit target_vlan
+delete routing-instances extracted_vrf interface target_port.target_vlan

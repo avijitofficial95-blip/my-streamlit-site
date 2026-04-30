@@ -1,0 +1,17 @@
+no interface src_port.src_vlan
+$
+
+---
+interface src_port.src_vlan
+description extracted_desc
+ip vrf forwarding extracted_vrf
+ip address address_ipv4
+ipv6_block_start
+ipv6 address address_ipv6
+ipv6_block_end
+no shutdown
+$
+vlan-configuration
+interface src_port.src_vlan
+encapsulation-dot1q src_vlan
+$

@@ -1,0 +1,19 @@
+configure port target_port
+description "need_to_Configure_manually"
+ethernet
+mode access
+encap-type dot1q
+mtu 9018
+access
+ingress
+queue-group "ACCESS_IN" create
+exit
+exit
+egress
+queue-group "ACCESS_OUT" instance 1 create
+exit
+exit
+exit
+exit
+no shutdown
+exit all

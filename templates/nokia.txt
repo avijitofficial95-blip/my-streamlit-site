@@ -1,0 +1,33 @@
+configure service vprn "extracted_vrf"
+interface "GE-target_port:target_vlan" create
+description "extracted_desc"
+address address_ipv4
+icmp
+no mask-reply
+no redirects
+exit
+ip-mtu 9000
+ipv6_block_start
+icmp6
+no redirects
+exit
+address address_ipv6
+ipv6_block_end
+reachable-time 3600
+exit
+sap target_port:target_vlan create
+ingress
+qos 5001
+exit
+egress
+egress-remark-policy "5001"
+exit
+exit all
+
+---
+
+configure service vprn "extracted_vrf"
+interface "GE-target_port:target_vlan" shutdown
+interface "GE-target_port:target_vlan" sap target_port:target_vlan shutdown
+interface "GE-target_port:target_vlan" no sap target_port:target_vlan
+no interface "GE-target_port:target_vlan"

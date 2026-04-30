@@ -1,0 +1,16 @@
+interface target_port.target_vlan
+ vlan-type dot1q target_vlan
+ mtu 9000
+ description extracted_desc
+ ip binding vpn-instance extracted_vrf
+ ip address address_ipv4
+ ipv6_block_start
+ address_ipv6
+ ipv6_block_end
+ statistic enable
+ trust upstream VIL-HUAWEI
+ arp rate-limit 50
+#
+
+---
+undo interface target_port.target_vlan

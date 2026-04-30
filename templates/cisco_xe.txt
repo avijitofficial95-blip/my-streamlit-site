@@ -1,0 +1,25 @@
+interface BDItarget_vlan
+no shutdown
+ description extracted_desc
+ vrf forwarding extracted_vrf
+ ip address address_ipv4
+ no ip redirects
+ no ip unreachables
+ no ip proxy-arp
+ ip mtu 9000
+ ipv6_block_start
+ ipv6 address address_ipv6
+ ipv6_block_end
+end
+!
+
+interface target_port
+service instance target_vlan ethernet
+description extracted_desc
+encapsulation dot1q target_vlan
+rewrite ingress tag pop 1 symmetric
+bridge-domain target_vlan split-horizon
+!
+
+---
+no interface BDItarget_vlan

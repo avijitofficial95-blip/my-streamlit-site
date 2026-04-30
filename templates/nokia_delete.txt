@@ -1,0 +1,6 @@
+configure service vprn "extracted_vrf"
+interface "extracted_interface_line" shutdown
+interface "extracted_interface_line" sap parent_port:src_vlan shutdown
+interface "extracted_interface_line" no sap parent_port:src_vlan
+no interface "extracted_interface_line"
+exit all

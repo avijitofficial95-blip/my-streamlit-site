@@ -1,0 +1,9 @@
+Model : IXRB - identifier - last 4 characters of hostname in provided input router logs
+Model : IXRC - identifier - last 4 characters of hostname in provided input router logs
+Model : IXR2 - identifier - last 4 characters of hostname in provided input router logs
+Model : IXR6 - identifier - last 4 characters of hostname in provided input router logs
+Model : SRA4 - identifier - last 4 characters of hostname in provided input router logs
+Model : SAR8 - identifier - last 4 characters of hostname in provided input router logs
+Model : SRA8 - identifier - last 4 characters of hostname in provided input router logs
+Model : SR01 - identifier - last 4 characters of hostname in provided input router logs
+Model : SR12 - identifier - last 4 characters of hostname in provided input router logs
